@@ -3,6 +3,7 @@ import {
   AddMessageSchema,
   CreateSessionSchema,
   CreateWorkspaceSchema,
+  ToolApprovalResponseSchema,
   type IncomingMessageType,
   type OutgoingMessageType,
 } from "commons/types";
@@ -12,18 +13,70 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 
 export class User {
   private socket: WebSocket;
+  private pendingToolApprovals = new Map<string, {
+    sessionId: string;
+    resolve: (approved: boolean) => void;
+  }>();
   public id: string;
 
   constructor(id: string, socket: WebSocket) {
     this.socket = socket;
     this.id = id;
+    this.socket.on("close", () => {
+      for (const [requestId, pending] of this.pendingToolApprovals) {
+        void SessionModel.updateOne(
+          { _id: new mongoose.Types.ObjectId(pending.sessionId), "conversation.payload.requestId": requestId },
+          { $set: { "conversation.$.payload.approvalStatus": "denied" } },
+        ).then(
+          () => pending.resolve(false),
+          () => pending.resolve(false),
+        );
+      }
+    });
   }
 
   async sendMessage(msg: OutgoingMessageType) {
-    this.socket.send(JSON.stringify(msg));
+    if (this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify(msg));
+    }
   }
   
   async handleIncomingMessage(msg: IncomingMessageType): Promise<OutgoingMessageType> {
+    if (msg.type === "tool-approval-response") {
+      const { success, data } = ToolApprovalResponseSchema.safeParse(msg.payload);
+      if (!success) {
+        throw new Error("Incorrect tool approval response");
+      }
+
+      const pending = this.pendingToolApprovals.get(data.requestId);
+      if (!pending) {
+        return {
+          type: "tool-approval-result",
+          payload: { requestId: data.requestId, approved: false },
+        };
+      }
+
+      try {
+        await SessionModel.updateOne(
+          { _id: new mongoose.Types.ObjectId(pending.sessionId), "conversation.payload.requestId": data.requestId },
+          {
+            $set: {
+              "conversation.$.payload.approvalStatus": data.approved ? "approved" : "denied",
+            },
+          },
+        );
+      } catch (error) {
+        pending.resolve(false);
+        throw error;
+      }
+      pending.resolve(data.approved);
+
+      return {
+        type: "tool-approval-result",
+        payload: { requestId: data.requestId, approved: data.approved },
+      };
+    }
+
     if (msg.type === "create-workspace") {
       const {success, data} = CreateWorkspaceSchema.safeParse(msg.payload);
       if (!success) {
@@ -102,8 +155,70 @@ export class User {
           options: {
             cwd: workspace.path,
             resume: session.anthropicSessionId ? session.anthropicSessionId : undefined,
-            allowedTools: ["Read", "Edit", "Glob"], // Auto-approve these tools
-            permissionMode: "acceptEdits" // Auto-approve file edits
+            allowedTools: ["Read", "Glob"],
+            permissionMode: "default",
+            canUseTool: async (toolName, input, options) => {
+              if (toolName === "Read" || toolName === "Glob") {
+                return { behavior: "allow", updatedInput: input };
+              }
+              if (toolName !== "Edit") {
+                return { behavior: "deny", message: `The ${toolName} tool is not enabled.` };
+              }
+
+              const approvalRequest = {
+                requestId: options.requestId,
+                toolUseId: options.toolUseID,
+                sessionId: session._id.toString(),
+                toolName,
+                input,
+                title: options.title ?? `Approve ${toolName}`,
+                description: options.description,
+              };
+              const toolMessage = {
+                role: "tool",
+                payload: {
+                  requestId: approvalRequest.requestId,
+                  toolUseId: approvalRequest.toolUseId,
+                  name: toolName,
+                  input,
+                  approvalStatus: "pending",
+                  title: approvalRequest.title,
+                  description: approvalRequest.description,
+                },
+              };
+              await SessionModel.updateOne(
+                { _id: session._id },
+                { $push: { conversation: toolMessage } },
+              );
+
+              const approved = await new Promise<boolean>((resolve) => {
+                let settled = false;
+                const finish = (decision: boolean) => {
+                  if (settled) return;
+                  settled = true;
+                  options.signal.removeEventListener("abort", abort);
+                  this.pendingToolApprovals.delete(approvalRequest.requestId);
+                  resolve(decision);
+                };
+                const abort = () => finish(false);
+
+                this.pendingToolApprovals.set(approvalRequest.requestId, {
+                  sessionId: approvalRequest.sessionId,
+                  resolve: finish,
+                });
+                options.signal.addEventListener("abort", abort, { once: true });
+                if (options.signal.aborted || this.socket.readyState !== WebSocket.OPEN) {
+                  finish(false);
+                  return;
+                }
+
+                this.sendMessage({ type: "approval-request", payload: approvalRequest });
+              });
+
+              return approved
+                ? { behavior: "allow", updatedInput: input }
+                : { behavior: "deny", message: "The edit was denied by the user." };
+            },
           }
         })) {
           // Print human-readable output
@@ -113,12 +228,15 @@ export class User {
                 console.log(block.text); // Claude's reasoning
               } else if ("name" in block) {
                 console.log(`Tool: ${block.name}`); // Tool being called
+                if (block.name === "Edit") continue;
                 const toolInput = "input" in block ? block.input : undefined;
+                const toolUseId = "id" in block ? String(block.id) : undefined;
                 const toolMessage = {
                   role: "tool",
                   payload: {
                     name: block.name,
                     input: toolInput,
+                    toolUseId,
                   },
                 };
                 await SessionModel.updateOne(
@@ -131,6 +249,7 @@ export class User {
                     sessionId: session._id.toString(),
                     name: block.name,
                     input: toolInput,
+                    toolUseId,
                   },
                 });
               }

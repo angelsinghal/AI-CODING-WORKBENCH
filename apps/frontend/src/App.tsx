@@ -129,12 +129,65 @@ export function App() {
                           payload: {
                             name: message.payload.name,
                             input: message.payload.input,
+                            toolUseId: message.payload.toolUseId,
                           },
                         },
                       ],
                     }
                   : session,
               ),
+            })),
+          );
+        }
+
+        if (message.type === "approval-request") {
+          setWorkspaces((current) =>
+            current.map((workspace) => ({
+              ...workspace,
+              sessions: workspace.sessions.map((session) =>
+                session.id === message.payload.sessionId
+                  ? {
+                      ...session,
+                      messages: [
+                        ...session.messages,
+                        {
+                          role: "tool" as const,
+                          payload: {
+                            requestId: message.payload.requestId,
+                            toolUseId: message.payload.toolUseId,
+                            name: message.payload.toolName,
+                            input: message.payload.input,
+                            approvalStatus: "pending" as const,
+                            title: message.payload.title,
+                            description: message.payload.description,
+                          },
+                        },
+                      ],
+                    }
+                  : session,
+              ),
+            })),
+          );
+        }
+
+        if (message.type === "tool-approval-result") {
+          setWorkspaces((current) =>
+            current.map((workspace) => ({
+              ...workspace,
+              sessions: workspace.sessions.map((session) => ({
+                ...session,
+                messages: session.messages.map((entry) =>
+                  entry.role === "tool" && entry.payload.requestId === message.payload.requestId
+                    ? {
+                        ...entry,
+                        payload: {
+                          ...entry.payload,
+                          approvalStatus: message.payload.approved ? "approved" : "denied",
+                        },
+                      }
+                    : entry,
+                ),
+              })),
             })),
           );
         }
@@ -208,6 +261,16 @@ export function App() {
       })),
     );
     setDraft("");
+  };
+
+  const handleToolApproval = (requestId: string, approved: boolean) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(
+      JSON.stringify({
+        type: "tool-approval-response",
+        payload: { requestId, approved },
+      }),
+    );
   };
 
   const selectedWorkspace = workspaces.find(
@@ -391,6 +454,7 @@ export function App() {
                       <MessageBubble
                         key={message.role === "user" ? message.id : `${selectedSession.id}-${index}`}
                         message={message}
+                        onToolApproval={handleToolApproval}
                       />
                     ))}
                   </div>
@@ -443,17 +507,58 @@ export function App() {
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({
+  message,
+  onToolApproval,
+}: {
+  message: Message;
+  onToolApproval: (requestId: string, approved: boolean) => void;
+}) {
   if (message.role === "tool") {
     return (
       <div className="flex justify-start">
-        <div className="max-w-[min(85%,42rem)] rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-zinc-800">
-          <p className="mb-2 text-xs font-semibold text-amber-900">
-            Tool call: {message.payload.name}
-          </p>
-          <pre className="whitespace-pre-wrap wrap-break-word font-mono text-xs leading-5">
+        <div className="w-full max-w-[min(85%,42rem)] overflow-hidden rounded-md border border-zinc-700 bg-zinc-900 text-zinc-100">
+          <div className="flex items-center justify-between border-b border-zinc-700 px-3 py-2">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <span className="rounded bg-zinc-700 px-1.5 py-0.5 text-xs text-zinc-200">{message.payload.name}</span>
+              <span>{message.payload.approvalStatus === "pending" ? "Approval required" : "Tool call"}</span>
+            </div>
+            {message.payload.approvalStatus && message.payload.approvalStatus !== "pending" && (
+              <span className={`text-xs ${message.payload.approvalStatus === "approved" ? "text-emerald-400" : "text-rose-400"}`}>
+                {message.payload.approvalStatus === "approved" ? "Approved" : "Denied"}
+              </span>
+            )}
+          </div>
+          {message.payload.title && (
+            <p className="px-3 pt-3 text-sm text-zinc-300">{message.payload.title}</p>
+          )}
+          <div className="px-3 py-3">
+            <p className="mb-1 text-[10px] font-semibold uppercase text-zinc-500">Input</p>
+            <pre className="max-h-60 overflow-auto whitespace-pre-wrap wrap-break-word rounded bg-zinc-950 p-3 font-mono text-xs leading-5 text-zinc-200">
             {JSON.stringify(message.payload.input, null, 2)}
-          </pre>
+            </pre>
+          </div>
+          {message.payload.description && (
+            <p className="px-3 pb-3 text-xs text-zinc-400">{message.payload.description}</p>
+          )}
+          {message.payload.approvalStatus === "pending" && message.payload.requestId && (
+            <div className="flex justify-end gap-2 border-t border-zinc-700 px-3 py-2">
+              <button
+                className="rounded border border-zinc-600 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+                onClick={() => onToolApproval(message.payload.requestId!, false)}
+                type="button"
+              >
+                Reject
+              </button>
+              <button
+                className="rounded bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600"
+                onClick={() => onToolApproval(message.payload.requestId!, true)}
+                type="button"
+              >
+                Approve edit
+              </button>
+            </div>
+          )}
         </div>
       </div>
     );

@@ -44,7 +44,25 @@ export type OutgoingMessageType ={
     payload: {
         sessionId: string,
         name: string,
-        input: unknown
+        input: unknown,
+        toolUseId?: string
+    }
+} | {
+    type: "approval-request",
+    payload: {
+        requestId: string,
+        toolUseId: string,
+        sessionId: string,
+        toolName: string,
+        input: unknown,
+        title: string,
+        description?: string
+    }
+} | {
+    type: "tool-approval-result",
+    payload: {
+        requestId: string,
+        approved: boolean
     }
 }
 
@@ -77,7 +95,12 @@ export type Message={
     role: "tool",
     payload: {
         name: string,
-        input: unknown
+        input: unknown,
+        requestId?: string,
+        toolUseId?: string,
+        approvalStatus?: "pending" | "approved" | "denied",
+        title?: string,
+        description?: string
     }
 }
 

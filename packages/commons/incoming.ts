@@ -19,6 +19,13 @@ export const AddMessageSchema =z.object({
 
 export type AddMessageSchemaType = z.infer<typeof AddMessageSchema>;
 
+export const ToolApprovalResponseSchema = z.object({
+    requestId: z.string(),
+    approved: z.boolean(),
+})
+
+export type ToolApprovalResponseSchemaType = z.infer<typeof ToolApprovalResponseSchema>;
+
 export type IncomingMessageType ={
     type:"create-workspace",
     payload: CreateWorkspaceSchemaType
@@ -28,4 +35,7 @@ export type IncomingMessageType ={
 } | {
     type:"add-message",
     payload: AddMessageSchemaType
+} | {
+    type: "tool-approval-response",
+    payload: ToolApprovalResponseSchemaType
 }
