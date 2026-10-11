@@ -20,6 +20,10 @@ export const MessageAddedType =z.object({
 
 export type MessageAddedType = z.infer<typeof MessageAddedType>;
 
+export const AssistantMessageAdded = z.any()
+
+export type AssistantMessageAddedType = z.infer<typeof AssistantMessageAdded>;
+
 export type OutgoingMessageType ={
     type:"workspace-created",
     payload: WorkspaceCreatedSchemaType
@@ -32,6 +36,16 @@ export type OutgoingMessageType ={
 } | {
     type:"init",
     workspaces: Workspace[]
+} | {
+    type: "assistant-message",
+    payload: AssistantMessageAddedType
+} | {
+    type: "tool-call",
+    payload: {
+        sessionId: string,
+        name: string,
+        input: unknown
+    }
 }
 
 export type ConnectionResponse = {
@@ -59,5 +73,11 @@ export type Message={
 } | {
     role : "assistant",
     payload: any
+} | {
+    role: "tool",
+    payload: {
+        name: string,
+        input: unknown
+    }
 }
 

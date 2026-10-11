@@ -88,6 +88,56 @@ export function App() {
           });
           setCreatingSessionFor(null);
         }
+
+        if (message.type === "assistant-message") {
+          const sessionId = activeSession?.sessionId;
+          if (!sessionId) return;
+
+          setWorkspaces((current) =>
+            current.map((workspace) => ({
+              ...workspace,
+              sessions: workspace.sessions.map((session) =>
+                session.id === sessionId
+                  ? {
+                      ...session,
+                      messages: [
+                        ...session.messages,
+                        {
+                          role: "assistant" as const,
+                          payload: message.payload,
+                        },
+                      ],
+                    }
+                  : session,
+              ),
+            })),
+          );
+        }
+
+        if (message.type === "tool-call") {
+          setWorkspaces((current) =>
+            current.map((workspace) => ({
+              ...workspace,
+              sessions: workspace.sessions.map((session) =>
+                session.id === message.payload.sessionId
+                  ? {
+                      ...session,
+                      messages: [
+                        ...session.messages,
+                        {
+                          role: "tool" as const,
+                          payload: {
+                            name: message.payload.name,
+                            input: message.payload.input,
+                          },
+                        },
+                      ],
+                    }
+                  : session,
+              ),
+            })),
+          );
+        }
       } catch (error) {
         console.error("Could not read server message", error);
       }
@@ -100,7 +150,7 @@ export function App() {
       socket.removeEventListener("error", updateConnection);
       socket.removeEventListener("message", handleMessage);
     };
-  }, [socket]);
+  }, [socket, activeSession?.sessionId]);
 
   const handleCreateWorkspace = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -394,12 +444,29 @@ export function App() {
 }
 
 function MessageBubble({ message }: { message: Message }) {
+  if (message.role === "tool") {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[min(85%,42rem)] rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-zinc-800">
+          <p className="mb-2 text-xs font-semibold text-amber-900">
+            Tool call: {message.payload.name}
+          </p>
+          <pre className="whitespace-pre-wrap wrap-break-word font-mono text-xs leading-5">
+            {JSON.stringify(message.payload.input, null, 2)}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+
   const content =
     message.role === "user"
       ? message.payload.message
-      : typeof message.payload === "string"
-        ? message.payload
-        : JSON.stringify(message.payload);
+      : typeof message.payload?.message === "string"
+        ? message.payload.message
+        : typeof message.payload === "string"
+          ? message.payload
+          : JSON.stringify(message.payload);
 
   return (
     <div className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>

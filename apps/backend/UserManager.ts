@@ -3,7 +3,7 @@ import {WebSocket} from "ws"
 import {User} from "./User";
 import {v4 as uuidv4} from "uuid";
 import { WorkspaceModel, SessionModel} from "db/client";
-import {type Session, type Workspace } from "commons/types";
+import {type Message, type Session, type Workspace } from "commons/types";
 
 export class UserManager {
     private users: User[];
@@ -30,10 +30,10 @@ export class UserManager {
             workspaces.forEach((w) => {
                     const finalSessions: Session[] = [];
         
-                   sessions.forEach((s) => {
-                     if(s.workspace === w._id){
+                                     sessions.forEach((s) => {
+                                         if(String(s.workspace) === w._id.toString()){
                         finalSessions.push({id:s._id.toString(),
-                        messages: s.messages,
+                                                messages: s.conversation as unknown as Message[],
                      })
                    }})
                     
